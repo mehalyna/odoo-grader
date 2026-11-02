@@ -17,11 +17,13 @@ import os
 import socket
 import sys
 
+from domain import CheckResult, CheckStatus, TaskResult
 from domain_logic import analyze_company_domain
 from odoo_client import OdooAccessError, OdooClient, load_credentials
+from reporting.json_report import task_result_to_dict
 
 TASK_ID = "1.1"
-MAX_POINTS = 6
+CHECK_POINTS = 1  # every criterion is worth one point
 MIN_UKRAINIAN_COMPANIES = 3
 PIEROGI_NAME = "Pierogi Polska"
 FILTER_NAME = "Українські компанії"
@@ -65,14 +67,15 @@ NOT_VISIBLE_MESSAGE = (
 
 
 def build_check(check_id, status, actual, evidence, message):
-    return {
-        "id": check_id,
-        "status": status,
-        "expected": EXPECTED[check_id],
-        "actual": actual,
-        "evidence": evidence,
-        "message": message,
-    }
+    return CheckResult(
+        id=check_id,
+        status=CheckStatus(status),
+        max_points=CHECK_POINTS,
+        expected=EXPECTED[check_id],
+        actual=actual,
+        evidence=tuple(evidence),
+        message=message,
+    )
 
 
 def to_check(check_id, result, extra_evidence=()):
@@ -355,39 +358,19 @@ def grade_filter_checks(client):
     return {cid: to_check(cid, scored[best_id][cid], [note]) for cid in FILTER_CHECK_IDS}
 
 
-def overall_status(checks):
-    statuses = {check["status"] for check in checks}
-    for status in ("ERROR", "FAIL", "REVIEW"):
-        if status in statuses:
-            return status
-    return "PASS"
-
-
-def make_report(checks):
-    return {
-        "task_id": TASK_ID,
-        "status": overall_status(checks),
-        "earned_points": sum(1 for check in checks if check["status"] == "PASS"),
-        "max_points": MAX_POINTS,
-        "checks": checks,
-        "manual_checks": MANUAL_CHECKS,
-        "notes": NOTES,
-    }
-
-
 def grade(client):
     results = {
         "1.1.1": guarded("1.1.1", lambda: check_ukrainian_companies(client)),
         "1.1.2": guarded("1.1.2", lambda: check_pierogi_polska(client)),
     }
     results.update(grade_filter_checks(client))
-    return make_report([results[check_id] for check_id in CHECK_IDS])
+    return TaskResult(TASK_ID, [results[check_id] for check_id in CHECK_IDS])
 
 
-def error_report(message):
+def error_result(message):
     checks = [build_check(cid, "ERROR", None, [message], "Odoo connection or authentication failed.")
               for cid in CHECK_IDS]
-    return make_report(checks)
+    return TaskResult(TASK_ID, checks)
 
 
 def diagnose(client):
@@ -410,11 +393,16 @@ def diagnose(client):
     }
 
 
-def print_summary(report, stream):
-    print(f"Task {TASK_ID}: {report['status']} - {report['earned_points']}/{MAX_POINTS} points", file=stream)
-    for check in report["checks"]:
-        print(f"  [{check['status']}] {check['id']}: {check['message']}", file=stream)
-    for manual in report["manual_checks"]:
+def print_summary(result, stream):
+    if result.is_final:
+        points = f"{result.earned_points}/{result.max_points} points"
+    else:
+        points = (f"{result.earned_points} confirmed, {result.pending_points} pending "
+                  f"(of {result.max_points}) points")
+    print(f"Task {result.task_id}: {result.status.value} - {points}", file=stream)
+    for check in result.checks:
+        print(f"  [{check.status.value}] {check.id}: {check.message}", file=stream)
+    for manual in MANUAL_CHECKS:
         print(f"  [{manual['status']}] {manual['id']}: {manual['message']}", file=stream)
     print("REVIEW and ERROR are not final zero scores; check the evidence in the JSON output.", file=stream)
 
@@ -432,15 +420,16 @@ def main(argv):
         url, db, login, password = load_credentials()
         client = OdooClient(url, db, login, password)
     except OdooAccessError as error:
-        report = error_report(str(error))
+        result = error_result(str(error))
     else:
         if "--diagnose" in argv:
             print(json.dumps(diagnose(client), ensure_ascii=False, indent=2))
             return 0
-        report = grade(client)
+        result = grade(client)
 
+    report = task_result_to_dict(result, MANUAL_CHECKS, NOTES)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    print_summary(report, sys.stderr)
+    print_summary(result, sys.stderr)
     return 0
 
 

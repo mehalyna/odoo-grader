@@ -4,7 +4,8 @@ import os
 import unittest
 from unittest import mock
 
-from task_1_1 import FILTER_NAME, grade_filter_checks, resolve_share_user
+from reporting.json_report import check_to_dict
+from task_1_1 import FILTER_NAME, PARTNER_FIELDS, grade_filter_checks, resolve_share_user
 
 GOOD_DOMAIN = "[('is_company', '=', True), ('active', '=', True), ('country_id.code', '=', 'UA')]"
 BAD_DOMAIN = "[('country_id.code', '=', 'UA')]"  # admits individuals
@@ -64,6 +65,25 @@ class FakeClient:
         raise AssertionError(f"unexpected search_read on {model}")
 
 
+class FullFakeClient(FakeClient):
+    """Also serves the partner data needed by criteria 1.1.1 and 1.1.2, so grade() runs end to end."""
+
+    def fields_get(self, model, attributes):
+        if model == "res.partner":
+            return {name: {} for name in PARTNER_FIELDS}
+        return super().fields_get(model, attributes)
+
+    def search_count(self, model, domain):
+        return 3
+
+    def search_read(self, model, domain, fields, context=None):
+        if model == "res.partner":
+            return [{"id": 1, "is_company": True, "country_id": [5, "Poland"], "lang": "en_US"}]
+        if model == "res.country" and domain[0][0] != "code":
+            return [{"code": "PL"}]
+        return super().search_read(model, domain, fields, context)
+
+
 class FilterLogicTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.dict(os.environ, {"ODOO_SHARE_USER_ID": "", "ODOO_SHARE_USER_LOGIN": ""})
@@ -71,7 +91,11 @@ class FilterLogicTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def grade(self, filters, users=(7,)):
-        return grade_filter_checks(FakeClient(filters, users))
+        return self.as_dicts(grade_filter_checks(FakeClient(filters, users)))
+
+    @staticmethod
+    def as_dicts(checks):
+        return {cid: check_to_dict(check) for cid, check in checks.items()}
 
     def test_live_style_domain_with_country_id_passes_check_4(self):
         # Shape of the live filter: no explicit active clause, country selected by res.country id.
@@ -94,7 +118,7 @@ class FilterLogicTests(unittest.TestCase):
     def test_owner_field_is_not_used_for_sharing(self):
         row = make_filter(1, user_ids=[])
         row["user_id"] = [7, "owner"]  # owner is Marina, but sharing must not be inferred from it
-        checks = grade_filter_checks(FakeClient([row], users=[7]))
+        checks = self.as_dicts(grade_filter_checks(FakeClient([row], users=[7])))
         self.assertEqual(checks["1.1.6"]["status"], "REVIEW")
 
     def test_ambiguous_marina_gives_review(self):
