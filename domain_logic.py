@@ -24,10 +24,14 @@ class UnsupportedDomain(Exception):
     """The domain text is not a plain Odoo domain literal."""
 
 
-def analyze_company_domain(domain_text):
-    """Compare a stored ir.filters domain with 'active companies in Ukraine'."""
+def analyze_company_domain(domain_text, ua_country_id=None):
+    """Compare a stored ir.filters domain with 'active companies in Ukraine'.
+
+    ua_country_id is the res.country id whose code is UA. Without it, country_id
+    conditions are unrecognised and the verdict is REVIEW.
+    """
     try:
-        formula, unknown_count = parse_domain(domain_text)
+        formula, unknown_count = parse_domain(domain_text, ua_country_id)
     except UnsupportedDomain as error:
         return DomainVerdict("REVIEW", f"Unsupported domain expression: {error}.")
     if unknown_count > MAX_UNKNOWN_CONDITIONS:
@@ -65,7 +69,7 @@ def describe_case(company, ukraine):
     return f"is_company={company} and country code UA={ukraine}"
 
 
-def parse_domain(domain_text):
+def parse_domain(domain_text, ua_country_id=None):
     """Return (formula, number_of_unknown_conditions) for a domain in prefix notation."""
     text = "[]" if domain_text in (None, False, "") else domain_text
     if isinstance(text, str):
@@ -95,7 +99,7 @@ def parse_domain(domain_text):
             else:
                 raise UnsupportedDomain(f"unknown logical operator {token!r}")
         else:
-            stack.append(_condition_node(token, counter))
+            stack.append(_condition_node(token, counter, ua_country_id))
 
     if not stack:
         return ("const", True), 0
@@ -123,7 +127,7 @@ def evaluate(node, env, unknown):
     return (left and right) if kind == "and" else (left or right)
 
 
-def _condition_node(token, counter):
+def _condition_node(token, counter, ua_country_id):
     if not isinstance(token, (list, tuple)) or len(token) != 3:
         raise UnsupportedDomain("a condition must be a (field, operator, value) triple")
     field, operator, value = token
@@ -132,7 +136,7 @@ def _condition_node(token, counter):
         return ("const", bool(field))
     known = None
     if isinstance(field, str) and isinstance(operator, str):
-        known = _known_condition(field, operator, value)
+        known = _known_condition(field, operator, value, ua_country_id)
     if known is not None:
         return known
     index = counter[0]
@@ -140,7 +144,7 @@ def _condition_node(token, counter):
     return ("unknown", index)
 
 
-def _known_condition(field, operator, value):
+def _known_condition(field, operator, value, ua_country_id):
     if field == "active":
         # Searches already return only active records, so this condition is always true there.
         if (operator == "=" and _flag(value) is True) or (operator == "!=" and _flag(value) is False):
@@ -163,7 +167,33 @@ def _known_condition(field, operator, value):
             return None
         return node if operator in ("=", "in") else ("not", node)
 
+    if field == "country_id":
+        return _country_id_condition(operator, value, ua_country_id)
+
     return None
+
+
+def _country_id_condition(operator, value, ua_country_id):
+    """Map a country_id condition on a res.country id to the Ukraine atom, when it is provably that."""
+    is_list = isinstance(value, (list, tuple))
+    if operator in ("in", "not in") and is_list and not value:
+        # Odoo: 'in' [] matches nothing; 'not in' [] matches everything.
+        return ("const", operator == "not in")
+    if ua_country_id is None:
+        return None
+    if operator in ("=", "!=") and _is_int(value) and value == ua_country_id:
+        node = ("ukraine",)
+    elif operator in ("in", "not in") and is_list and all(_is_int(v) for v in value) \
+            and set(value) == {ua_country_id}:
+        # Only a list that contains UA and nothing else is UA; any other member makes it unrecognised.
+        node = ("ukraine",)
+    else:
+        return None
+    return node if operator in ("=", "in") else ("not", node)
+
+
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _flag(value):

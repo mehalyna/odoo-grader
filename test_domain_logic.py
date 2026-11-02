@@ -53,5 +53,50 @@ class DomainLogicTests(unittest.TestCase):
         self.assertEqual(analyze_company_domain(as_stored(["&", COMPANY])).status, "REVIEW")
 
 
+# Resolved at run time from res.country in the real grader; any id works here.
+UA_ID = 4242
+OTHER_ID = 17
+
+
+class CountryIdTests(unittest.TestCase):
+    def verdict(self, domain, ua_id=UA_ID):
+        return analyze_company_domain(as_stored(domain), ua_id).status
+
+    def test_singleton_in_passes_without_active_clause(self):
+        self.assertEqual(self.verdict([("is_company", "=", True), ("country_id", "in", [UA_ID])]), "PASS")
+
+    def test_equals_passes(self):
+        self.assertEqual(self.verdict(["&", COMPANY, ("country_id", "=", UA_ID)]), "PASS")
+
+    def test_multiple_country_in_is_not_normalised_to_ua(self):
+        # [UA, other] also selects the other country, so it must not be treated as UA-only.
+        self.assertEqual(self.verdict([COMPANY, ("country_id", "in", [UA_ID, OTHER_ID])]), "REVIEW")
+
+    def test_empty_in_selects_nothing_and_fails(self):
+        self.assertEqual(self.verdict([COMPANY, ("country_id", "in", [])]), "FAIL")
+
+    def test_not_equal_ua_selects_non_ukrainian_companies_and_fails(self):
+        self.assertEqual(self.verdict([COMPANY, ("country_id", "!=", UA_ID)]), "FAIL")
+
+    def test_double_negated_not_equal_passes(self):
+        self.assertEqual(self.verdict(["&", COMPANY, "!", ("country_id", "!=", UA_ID)]), "PASS")
+
+    def test_not_in_ua_selects_non_ukrainian_companies_and_fails(self):
+        self.assertEqual(self.verdict([COMPANY, ("country_id", "not in", [UA_ID])]), "FAIL")
+
+    def test_double_negated_not_in_ua_passes(self):
+        self.assertEqual(self.verdict(["&", COMPANY, "!", ("country_id", "not in", [UA_ID])]), "PASS")
+
+    def test_not_in_multiple_countries_is_unrecognised(self):
+        self.assertEqual(self.verdict([COMPANY, ("country_id", "not in", [UA_ID, OTHER_ID])]), "REVIEW")
+
+    def test_empty_not_in_selects_everything_and_fails(self):
+        self.assertEqual(self.verdict([COMPANY, ("country_id", "not in", [])]), "FAIL")
+
+    def test_country_id_without_resolved_ua_id_gives_review(self):
+        verdict = analyze_company_domain(as_stored([COMPANY, ("country_id", "in", [UA_ID])]), None)
+        self.assertEqual(verdict.status, "REVIEW")
+
+
 if __name__ == "__main__":
     unittest.main()

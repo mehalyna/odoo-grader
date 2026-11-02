@@ -55,7 +55,7 @@ MANUAL_CHECKS = [
 NOTES = [
     "Only read operations are used: search_read, search_count, read and fields_get.",
     "Authorship of existing contacts is not assessed: there is no baseline snapshot.",
-    "A public filter (no owner) is accessible to all users but does not prove a personal share with the target user.",
+    "Filter sharing is decided by user_ids only; the record owner field is not used.",
 ]
 
 NOT_VISIBLE_MESSAGE = (
@@ -186,6 +186,14 @@ def resolve_share_user(client):
                   "ODOO_SHARE_USER_LOGIN to choose one; the first match is never selected.")
 
 
+def load_ua_country_id(client):
+    """Return (res.country id for code UA, problem). The id is resolved at run time, never hard-coded."""
+    rows = client.search_read("res.country", [("code", "=", "UA")], ["id"])
+    if len(rows) == 1:
+        return rows[0]["id"], None
+    return None, f"Expected exactly one res.country with code UA, found {len(rows)}."
+
+
 def load_filter_context(client):
     meta = client.fields_get("ir.filters", ["type", "relation"])
     fields = [name for name in FILTER_FIELDS if name in meta]
@@ -197,6 +205,9 @@ def load_filter_context(client):
     context = {
         "rows": rows,
         "fields": set(fields),
+        "ua_country_id": None,
+        "ua_problem": None,
+        "ua_error": None,
         "contacts_action": None,
         "contacts_problem": None,
         "contacts_error": None,
@@ -204,6 +215,11 @@ def load_filter_context(client):
         "share_message": None,
         "share_error": None,
     }
+
+    try:
+        context["ua_country_id"], context["ua_problem"] = load_ua_country_id(client)
+    except OdooAccessError as error:
+        context["ua_error"] = str(error)
 
     xmlid = os.environ.get("ODOO_CONTACTS_ACTION_XMLID", DEFAULT_CONTACTS_XMLID).strip()
     try:
@@ -236,9 +252,13 @@ def check_record(row, ctx):
 def check_domain(row, ctx):
     if "domain" not in ctx["fields"]:
         return "REVIEW", None, [], "domain is missing from ir.filters metadata."
+    if ctx["ua_error"]:
+        return "ERROR", None, [ctx["ua_error"]], "The UA country could not be read from res.country."
     text = row.get("domain")
-    verdict = analyze_company_domain(text)
+    verdict = analyze_company_domain(text, ctx["ua_country_id"])
     evidence = [f"Stored domain (truncated): {str(text)[:300]}"]
+    if ctx["ua_problem"]:
+        evidence.append(ctx["ua_problem"])
     return verdict.status, "domain analysed", evidence, verdict.message
 
 

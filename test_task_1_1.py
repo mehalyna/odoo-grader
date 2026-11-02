@@ -55,6 +55,8 @@ class FakeClient:
             if domain and domain[0][0] == "id":
                 users = [user for user in users if user == domain[0][2]]
             return [{"id": user} for user in users]
+        if model == "res.country":
+            return [{"id": 4242}]  # the UA id; must match UA_ID in test_domain_logic
         if model == "ir.model.data":
             return [{"res_id": 100}]
         if model == "ir.actions.act_window":
@@ -70,6 +72,12 @@ class FilterLogicTests(unittest.TestCase):
 
     def grade(self, filters, users=(7,)):
         return grade_filter_checks(FakeClient(filters, users))
+
+    def test_live_style_domain_with_country_id_passes_check_4(self):
+        # Shape of the live filter: no explicit active clause, country selected by res.country id.
+        domain = "[('is_company', '=', True), ('country_id', 'in', [4242])]"
+        checks = self.grade([make_filter(1, domain=domain, user_ids=[7])])
+        self.assertEqual(checks["1.1.4"]["status"], "PASS")
 
     def test_marina_included_passes(self):
         checks = self.grade([make_filter(1, user_ids=[7])])
