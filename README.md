@@ -38,5 +38,5 @@ python -m cli.task_1_1 --diagnose  # print field metadata only (no record data)
 ## Tests (offline)
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -t . -v
 ```
