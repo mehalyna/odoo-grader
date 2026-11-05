@@ -1,49 +1,49 @@
 """Read-only autograder for task 1.1 (Odoo 19 Contacts). CLI entry point and composition root.
 
-Usage:
-    python -m cli.task_1_1             # grade the database, JSON to stdout, summary to stderr
-    python -m cli.task_1_1 --diagnose  # print metadata of the relevant fields only
+Usage (run from the repository root):
+    python -m cli.task_1_1                       # one database from .env: JSON to stdout, summary to stderr
+    python -m cli.task_1_1 --diagnose            # print metadata of the relevant fields only
+    python -m cli.task_1_1 --config students.json --student student_01
+    python -m cli.task_1_1 --config students.json --all [--output-dir results]
 
-Environment variables:
+Single-database environment variables:
     ODOO_URL, ODOO_DB, ODOO_LOGIN   connection (defaults: grader.py values; login is prompted if unset)
     ODOO_PASSWORD                   optional; otherwise prompted with getpass
     ODOO_SHARE_USER_ID              user to test for "Марина"; required if several users match
     ODOO_SHARE_USER_LOGIN           alternative to ODOO_SHARE_USER_ID
     ODOO_CONTACTS_ACTION_XMLID      Contacts action (default: contacts.action_contacts)
 
-Layers: infrastructure/odoo/task_1_1_reader.py reads evidence, application/tasks/task_1_1.py grades it.
-This module wires them together and keeps the CLI output (diagnostics, manual checks, summary).
+With --config, each student's URL, database and credential variable names come from the JSON file and the
+sharing user and Contacts action from optional per-student fields; the ODOO_* variables above are not used.
+
+Layers: infrastructure/odoo/task_1_1_reader.py reads evidence, application/tasks/task_1_1.py grades it,
+cli/batch.py runs it per student. This module wires them together and keeps the CLI output.
 """
 
+import argparse
 import json
+import os
 import socket
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-from application.dto.task_1_1 import FILTER_NAME, PARTNER_FIELDS  # noqa: F401  (re-exported for callers)
+from application.dto.task_1_1 import PARTNER_FIELDS
 from application.tasks.task_1_1 import (
+    MANUAL_CHECKS,
+    NOTES,
     TASK_ID,
     connection_error_result,
     grade_filter_checks as grade_filter_checks_from_evidence,
     grade_task,
 )
+from cli.batch import exit_code, format_outcome, new_run_id, run_batch
+from infrastructure.config.students import ConfigError, load_students, select_students
 from infrastructure.odoo.task_1_1_reader import FILTER_FIELDS, OdooTask11Reader
-from odoo_client import OdooAccessError, OdooClient, load_credentials
+from odoo_client import OdooAccessError, OdooClient, load_credentials, load_env_file
 from reporting.json_report import task_result_to_dict
 
-MANUAL_CHECKS = [
-    {
-        "id": "1.1.5-ui",
-        "status": "MANUAL",
-        "message": f'Open Contacts in a fresh session and confirm that "{FILTER_NAME}" is applied automatically. '
-                   "The API checks only confirm the default configuration.",
-    }
-]
-
-NOTES = [
-    "Only read operations are used: search_read, search_count, read and fields_get.",
-    "Authorship of existing contacts is not assessed: there is no baseline snapshot.",
-    "Filter sharing is decided by user_ids only; the record owner field is not used.",
-]
+DEFAULT_OUTPUT_DIR = "results"
 
 
 def grade(client):
@@ -96,16 +96,68 @@ def configure_utf8_output():
             stream.reconfigure(encoding="utf-8")
 
 
+def parse_args(argv):
+    parser = argparse.ArgumentParser(prog="python -m cli.task_1_1", description="Grade Odoo task 1.1 (read-only).")
+    parser.add_argument("--diagnose", action="store_true", help="print field metadata only (single database)")
+    parser.add_argument("--config", metavar="FILE", help="students JSON file (see students.example.json)")
+    parser.add_argument("--student", metavar="ID", help="grade one configured student (requires --config)")
+    parser.add_argument("--all", action="store_true", dest="all_students",
+                        help="grade every configured student (requires --config)")
+    parser.add_argument("--output-dir", metavar="DIR",
+                        help=f"where reports are written (requires --config; default: {DEFAULT_OUTPUT_DIR})")
+    args = parser.parse_args(argv)
+
+    if args.config is None:
+        if args.student is not None or args.all_students or args.output_dir is not None:
+            parser.error("--student, --all and --output-dir require --config")
+    else:
+        if args.diagnose:
+            parser.error("--diagnose cannot be combined with --config")
+        if (args.student is None) == (not args.all_students):
+            parser.error("--config requires exactly one of --student or --all")
+    return args
+
+
+def run_configured(args):
+    """Multi-student mode. Configuration is validated before any connection or credential lookup."""
+    try:
+        selected = select_students(load_students(args.config), args.student, args.all_students)
+    except ConfigError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return 2
+
+    load_env_file()
+    run_id = new_run_id(datetime.now(timezone.utc))
+    outcomes = run_batch(
+        selected,
+        Path(args.output_dir or DEFAULT_OUTPUT_DIR),
+        run_id=run_id,
+        environ=os.environ,
+        client_factory=OdooClient,
+        clock=lambda: datetime.now(timezone.utc),
+    )
+    print(f"Run {run_id}")
+    for outcome in outcomes:
+        print(format_outcome(outcome))
+        if outcome.save_error:
+            print(f"ERROR: report for {outcome.student_id} was not saved: {outcome.save_error}", file=sys.stderr)
+    return exit_code(outcomes)
+
+
 def main(argv):
+    args = parse_args(argv)
     configure_utf8_output()
     socket.setdefaulttimeout(60)
+    if args.config is not None:
+        return run_configured(args)
+
     try:
         url, db, login, password = load_credentials()
         client = OdooClient(url, db, login, password)
     except OdooAccessError as error:
         result = connection_error_result(str(error))
     else:
-        if "--diagnose" in argv:
+        if args.diagnose:
             print(json.dumps(diagnose(client), ensure_ascii=False, indent=2))
             return 0
         reader = OdooTask11Reader(client)

@@ -1,0 +1,11 @@
+{
+  "students": [
+    {
+      "id": "student_01",
+      "url": "https://edu-student.odoo.com",
+      "db": "edu-student",
+      "login_env": "ODOO_LOGIN",
+      "password_env": "ODOO_PASSWORD"
+    }
+  ]
+}

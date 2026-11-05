@@ -21,12 +21,17 @@ class OdooAccessError(Exception):
     """Raised when Odoo cannot be reached, rejects the login, or fails a read."""
 
 
+def load_env_file():
+    """Load .env (if present) into the environment. Existing environment variables take precedence."""
+    load_dotenv(ENV_FILE, override=False)
+
+
 def load_credentials():
     """Read settings from .env (if present) and environment variables; prompt only for missing credentials.
 
     Existing environment variables take precedence over .env values (override=False).
     """
-    load_dotenv(ENV_FILE, override=False)
+    load_env_file()
     url = os.environ.get("ODOO_URL") or DEFAULT_URL
     db = os.environ.get("ODOO_DB") or DEFAULT_DB
     login = os.environ.get("ODOO_LOGIN") or input("Odoo login (email): ").strip()

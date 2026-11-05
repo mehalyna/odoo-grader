@@ -6,6 +6,7 @@ failed. Each section is read independently, so one failure keeps the other secti
 """
 
 import os
+from dataclasses import dataclass
 
 from application.dto.task_1_1 import (
     FILTER_NAME,
@@ -27,6 +28,24 @@ FILTER_FIELDS = ("name", "model_id", "domain", "user_ids", "is_default", "active
 PARTNER_COUNT_FIELDS = ("is_company", "country_id", "active")
 
 
+@dataclass(frozen=True)
+class ReaderOptions:
+    """Per-database lookup options. Defaults match the original behaviour: name match, default Contacts action."""
+
+    share_user_id: str = ""  # takes precedence over share_user_login
+    share_user_login: str = ""
+    contacts_action_xmlid: str = DEFAULT_CONTACTS_XMLID
+
+    @classmethod
+    def from_environment(cls):
+        """Single-database mode: ODOO_SHARE_USER_ID, ODOO_SHARE_USER_LOGIN, ODOO_CONTACTS_ACTION_XMLID."""
+        return cls(
+            share_user_id=os.environ.get("ODOO_SHARE_USER_ID", "").strip(),
+            share_user_login=os.environ.get("ODOO_SHARE_USER_LOGIN", "").strip(),
+            contacts_action_xmlid=os.environ.get("ODOO_CONTACTS_ACTION_XMLID", DEFAULT_CONTACTS_XMLID).strip(),
+        )
+
+
 class OdooShapeError(ValueError):
     """An Odoo value does not have the expected shape."""
 
@@ -34,8 +53,13 @@ class OdooShapeError(ValueError):
 class OdooTask11Reader:
     """Implements Task11DataPort structurally: load_evidence() is the only public method."""
 
-    def __init__(self, client):
+    def __init__(self, client, options=None):
+        """options=None reads the ODOO_* environment variables when evidence is loaded."""
         self._client = client
+        self._options = options
+
+    def _current_options(self):
+        return self._options if self._options is not None else ReaderOptions.from_environment()
 
     def load_evidence(self):
         partner_fields = _guard(self._partner_field_names)
@@ -118,7 +142,7 @@ class OdooTask11Reader:
         return Retrieval.ok(tuple(_filter_record(row) for row in sorted(rows, key=lambda row: row["id"])))
 
     def _contacts_action(self):
-        xmlid = os.environ.get("ODOO_CONTACTS_ACTION_XMLID", DEFAULT_CONTACTS_XMLID).strip()
+        xmlid = self._current_options().contacts_action_xmlid
         module, _, name = xmlid.partition(".")
         refs = self._client.search_read(
             "ir.model.data",
@@ -134,8 +158,8 @@ class OdooTask11Reader:
 
     def _share_user_id(self):
         """Identify the user for criterion 1.1.6. Never picks one of several matches."""
-        configured_id = os.environ.get("ODOO_SHARE_USER_ID", "").strip()
-        configured_login = os.environ.get("ODOO_SHARE_USER_LOGIN", "").strip()
+        options = self._current_options()
+        configured_id, configured_login = options.share_user_id, options.share_user_login
         if configured_id:
             try:
                 domain = [("id", "=", int(configured_id))]

@@ -28,6 +28,21 @@ EXPECTED = {
     "1.1.6": f'Filter accessible to user "{SHARE_USER_NAME}" (personal share confirmed, not only public)',
 }
 
+MANUAL_CHECKS = [
+    {
+        "id": "1.1.5-ui",
+        "status": "MANUAL",
+        "message": f'Open Contacts in a fresh session and confirm that "{FILTER_NAME}" is applied automatically. '
+                   "The API checks only confirm the default configuration.",
+    }
+]
+
+NOTES = [
+    "Only read operations are used: search_read, search_count, read and fields_get.",
+    "Authorship of existing contacts is not assessed: there is no baseline snapshot.",
+    "Filter sharing is decided by user_ids only; the record owner field is not used.",
+]
+
 NOT_VISIBLE_MESSAGE = (
     "No ir.filters record with this name is visible to the API user. A personal filter of another "
     "user can be hidden by record rules, so absence cannot be confirmed."
@@ -51,10 +66,9 @@ def to_check(check_id, result, extra_evidence=()):
     return build_check(check_id, status, actual, list(evidence) + list(extra_evidence), message)
 
 
-def connection_error_result(message):
-    """Every criterion ERROR when Odoo cannot be reached or the login fails."""
-    checks = [build_check(cid, "ERROR", None, [message], "Odoo connection or authentication failed.")
-              for cid in CHECK_IDS]
+def connection_error_result(message, summary="Odoo connection or authentication failed."):
+    """Every criterion ERROR when nothing could be assessed (no connection, login or credentials)."""
+    checks = [build_check(cid, "ERROR", None, [message], summary) for cid in CHECK_IDS]
     return TaskResult(TASK_ID, checks)
 
 
