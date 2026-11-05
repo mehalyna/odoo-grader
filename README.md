@@ -31,12 +31,12 @@ Settings are read in this order: existing environment variables, then `.env`. Mi
 ## Run
 
 ```powershell
-python task_1_1.py             # grade task 1.1; JSON on stdout, summary on stderr
-python task_1_1.py --diagnose  # print field metadata only (no record data)
+python -m cli.task_1_1             # grade task 1.1; JSON on stdout, summary on stderr
+python -m cli.task_1_1 --diagnose  # print field metadata only (no record data)
 ```
 
 ## Tests (offline)
 
 ```powershell
-python -m unittest test_domain_logic test_task_1_1 -v
+python -m unittest discover -s tests -v
 ```
